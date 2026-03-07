@@ -257,39 +257,39 @@ azurite --silent --location /tmp/azurite
 az login
 
 # Create resource group
-az group create --name rg-aos-prod --location eastus
+az group create --name rg-aos-dispatcher-prod --location eastus
 
 # Create storage account
 az storage account create \
-  --name staosdatastore \
-  --resource-group rg-aos-prod \
+  --name staosdispatcherprod \
+  --resource-group rg-aos-dispatcher-prod \
   --location eastus \
   --sku Standard_LRS
 
 # Create Service Bus namespace
 az servicebus namespace create \
-  --name sb-aos-prod \
-  --resource-group rg-aos-prod \
+  --name sb-aos-dispatcher-prod \
+  --resource-group rg-aos-dispatcher-prod \
   --location eastus \
   --sku Standard
 
 # Create Function App
 az functionapp create \
-  --resource-group rg-aos-prod \
+  --resource-group rg-aos-dispatcher-prod \
   --consumption-plan-location eastus \
   --runtime python \
-  --runtime-version 3.9 \
+  --runtime-version 3.10 \
   --functions-version 4 \
-  --name func-aos-prod \
-  --storage-account staosdatastore
+  --name aos-dispatcher \
+  --storage-account staosdispatcherprod
 
-# Deploy
-func azure functionapp publish func-aos-prod
+# Deploy via the aos-infrastructure orchestrator (recommended), or directly:
+azd deploy aos-dispatcher
 
 # Configure app settings
 az functionapp config appsettings set \
-  --name func-aos-prod \
-  --resource-group rg-aos-prod \
+  --name aos-dispatcher \
+  --resource-group rg-aos-dispatcher-prod \
   --settings \
     AZURE_STORAGE_CONNECTION_STRING="@Microsoft.KeyVault(...)" \
     AZURE_SERVICEBUS_CONNECTION_STRING="@Microsoft.KeyVault(...)"
@@ -302,19 +302,19 @@ az functionapp config appsettings set \
 ```kusto
 // Function execution times
 requests
-| where cloud_RoleName == "func-aos-prod"
+| where cloud_RoleName == "aos-dispatcher"
 | summarize avg(duration), max(duration), count() by name
 | order by avg_duration desc
 
 // Errors
 exceptions
-| where cloud_RoleName == "func-aos-prod"
+| where cloud_RoleName == "aos-dispatcher"
 | project timestamp, type, outerMessage, innermostMessage
 | order by timestamp desc
 
 // Service Bus dependencies
 dependencies
-| where cloud_RoleName == "func-aos-prod"
+| where cloud_RoleName == "aos-dispatcher"
 | where type == "Azure Service Bus"
 | summarize count() by name, resultCode
 ```

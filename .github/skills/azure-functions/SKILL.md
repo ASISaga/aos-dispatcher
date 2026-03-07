@@ -10,7 +10,7 @@ Expert knowledge for developing, deploying, and debugging Azure Functions in the
 
 ## When to Use This Skill
 - Deploying AOS to Azure Functions
-- Working with function_app.py and RealmOfAgents
+- Working with src/function_app.py
 - Integrating with Azure AI Agents runtime (Foundry)
 - Debugging Azure Functions triggers
 - Configuring Azure Service Bus integration
@@ -38,7 +38,7 @@ AOS is deployed as an Azure Functions application that:
               │
               ▼
 ┌─────────────────────────────────────┐
-│   AOS Azure Functions               │
+│   aos-dispatcher (Azure Functions)  │
 │   • Service Bus triggers            │
 │   • HTTP endpoints                  │
 │   • Timer triggers                  │
@@ -56,7 +56,7 @@ AOS is deployed as an Azure Functions application that:
               │
               ▼
 ┌─────────────────────────────────────┐
-│   AgentOperatingSystem Core         │
+│   AOS Kernel (aos-kernel)           │
 │   • Storage, MCP, etc.              │
 └─────────────────────────────────────┘
 ```
@@ -64,10 +64,9 @@ AOS is deployed as an Azure Functions application that:
 ## File Structure
 
 ### Key Files
-- `function_app.py` - Main Azure Functions entry point
-- `host.json` - Azure Functions host configuration
+- `src/function_app.py` - Main Azure Functions entry point
+- `src/host.json` - Azure Functions host configuration
 - `local.settings.json` - Local development settings (not in git)
-- `azure_functions/` - Azure-specific function implementations
 
 ### Configuration Files
 
@@ -209,7 +208,7 @@ cp local.settings.json.example local.settings.json
 
 3. **Install Dependencies**:
 ```bash
-pip install -e ".[azure,full]"
+pip install -e ".[dev]"
 ```
 
 4. **Run Locally**:
@@ -468,17 +467,17 @@ async def test_end_to_end_flow():
 ```kusto
 // Function executions
 requests
-| where cloud_RoleName == "AgentOperatingSystem"
+| where cloud_RoleName == "aos-dispatcher"
 | project timestamp, name, duration, success
 
 // Errors
 exceptions
-| where cloud_RoleName == "AgentOperatingSystem"
+| where cloud_RoleName == "aos-dispatcher"
 | project timestamp, type, message, details
 
 // Service Bus processing
 dependencies
-| where cloud_RoleName == "AgentOperatingSystem"
+| where cloud_RoleName == "aos-dispatcher"
 | where type == "Azure Service Bus"
 | summarize count() by name, resultCode
 ```
@@ -499,14 +498,12 @@ func azure functionapp logstream <function-app-name>
 ## File Locations
 
 ### Core Files
-- `function_app.py` - Main entry point with function definitions
-- `host.json` - Host configuration
+- `src/function_app.py` - Main entry point with function definitions
+- `src/host.json` - Host configuration
 - `local.settings.json` - Local settings (gitignored)
 
-### Related Directories
-- `azure_functions/` - Azure-specific implementations
-- `src/AgentOperatingSystem/messaging/` - Service Bus integration
-- `tests/test_azure_functions_infrastructure.py` - Azure Functions tests
+### Related Files
+- `tests/test_function_app.py` - Azure Functions tests
 
 ## Related Skills
 - `perpetual-agents` - Understanding AOS agents
@@ -517,5 +514,5 @@ func azure functionapp logstream <function-app-name>
 ## Additional Resources
 - [Azure Functions Python Developer Guide](https://learn.microsoft.com/azure/azure-functions/functions-reference-python)
 - [Azure Functions Core Tools](https://learn.microsoft.com/azure/azure-functions/functions-run-local)
-- function_app.py - Implementation reference
-- docs/FOUNDRY_AGENT_SERVICE.md - Foundry integration examples
+- src/function_app.py - Implementation reference
+- docs/architecture.md - Architecture and design patterns
