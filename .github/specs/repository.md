@@ -25,8 +25,9 @@ All multi-agent orchestration is managed internally by the **Foundry Agent Servi
 | Concern | Owner |
 |---------|-------|
 | HTTP and Service Bus dispatch layer | **aos-dispatcher** |
+| MCP server deployment and tool routing | **aos-mcp-servers** (ASISaga/mcp) |
+| Agent catalog (CEO, CFO, CMO, COO agents) | **aos-realm-of-agents** (ASISaga/realm-of-agents) |
 | Orchestration engine, messaging, storage, auth, MCP, monitoring | `aos-kernel` |
-| Agent catalog (CEO, CFO, CMO, COO agents) | `aos-realm-of-agents` |
 | Client SDK and app framework | `aos-client-sdk` |
 | Infrastructure provisioning and deployment | `aos-infrastructure` |
 
@@ -104,10 +105,12 @@ aos-dispatcher/
 | | GET | `/api/metrics` | Get metric series |
 | | POST | `/api/kpis` | Create a KPI |
 | | GET | `/api/kpis/dashboard` | Get KPI dashboard |
-| **MCP** | GET | `/api/mcp/servers` | List MCP servers |
-| | POST | `/api/mcp/servers/{s}/tools/{t}` | Call an MCP tool |
-| | GET | `/api/mcp/servers/{s}/status` | Get MCP server status |
-| **Agents** | POST | `/api/agents/register` | Register a PurposeDrivenAgent with Foundry |
+| **MCP** | GET | `/api/mcp/servers` | List MCP servers (proxied to aos-mcp-servers) |
+| | POST | `/api/mcp/servers/{s}/tools/{t}` | Call an MCP tool (proxied to aos-mcp-servers) |
+| | GET | `/api/mcp/servers/{s}/status` | Get MCP server status (proxied to aos-mcp-servers) |
+| **Agents** | GET | `/api/agents` | List agents (proxied to aos-realm-of-agents) |
+| | GET | `/api/agents/{id}` | Get agent descriptor (proxied to aos-realm-of-agents) |
+| | POST | `/api/agents/register` | Register a PurposeDrivenAgent with Foundry |
 | | POST | `/api/agents/{id}/ask` | Ask an agent |
 | | POST | `/api/agents/{id}/send` | Send to an agent |
 | | POST | `/api/agents/{id}/message` | Send message via Foundry bridge |
@@ -190,7 +193,8 @@ azd deploy aos-dispatcher
 |-----------|------|
 | [aos-client-sdk](https://github.com/ASISaga/aos-client-sdk) | Client SDK — used by client apps to talk to this dispatcher |
 | [aos-kernel](https://github.com/ASISaga/aos-kernel) | AOS kernel — orchestration engine, messaging, storage, monitoring |
-| [aos-realm-of-agents](https://github.com/ASISaga/aos-realm-of-agents) | Agent catalog (CEO, CFO, CMO, COO agents) |
+| [mcp](https://github.com/ASISaga/mcp) | **aos-mcp-servers** function app — config-driven MCP server deployment & tool routing |
+| [realm-of-agents](https://github.com/ASISaga/realm-of-agents) | **aos-realm-of-agents** function app — agent catalog (CEO, CFO, CMO, COO agents) |
 | [aos-intelligence](https://github.com/ASISaga/aos-intelligence) | ML / intelligence layer |
 | [business-infinity](https://github.com/ASISaga/business-infinity) | Example client application |
 | [aos-infrastructure](https://github.com/ASISaga/aos-infrastructure) | Infrastructure deployment orchestrator |

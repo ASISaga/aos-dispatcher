@@ -2,10 +2,17 @@
 
 ## Overview
 
-The AOS Function App is the **orchestration API** for the Agent Operating System.
-Client applications submit orchestration requests (selecting agents from the
-RealmOfAgents catalog) and retrieve results through HTTP endpoints exposed by
-this function app.
+The AOS Dispatcher is the **central HTTP/Service Bus dispatcher** for the Agent Operating System.
+Client applications submit orchestration requests and retrieve results through the HTTP endpoints
+exposed by this function app.
+
+The AOS platform is deployed as **3 separate Azure Functions apps**:
+
+| Function App | Repository | Responsibility |
+|---|---|---|
+| **aos-dispatcher** | [ASISaga/aos-dispatcher](https://github.com/ASISaga/aos-dispatcher) | Central dispatcher — orchestrations, app registration, knowledge base, risk registry, audit, covenants, analytics, health |
+| **aos-mcp-servers** | [ASISaga/mcp](https://github.com/ASISaga/mcp) | Config-driven MCP server deployment and tool routing |
+| **aos-realm-of-agents** | [ASISaga/realm-of-agents](https://github.com/ASISaga/realm-of-agents) | Agent catalog & registry (CEO, CFO, CMO, COO agents) |
 
 ## Component Architecture
 
@@ -19,16 +26,21 @@ this function app.
          HTTPS (aos-client-sdk)
               │
               ▼
-┌─────────────────────────────────────┐  ┌─────────────────────────────────┐
-│   AOS Function App                  │  │   RealmOfAgents                 │
-│   POST /api/orchestrations          │  │   GET /api/realm/agents         │
-│   GET  /api/orchestrations/{id}     │  │   Agent catalog (CEO, CFO, ...) │
-│   GET  /api/orchestrations/{id}/    │  │                                 │
-│         result                      │  │                                 │
-│   POST /api/orchestrations/{id}/    │  │                                 │
-│         cancel                      │  │                                 │
-│   GET  /api/health                  │  │                                 │
-└─────────────────────────────────────┘  └─────────────────────────────────┘
+┌─────────────────────────────────────┐
+│   aos-dispatcher  (Function App 1)  │
+│   POST /api/orchestrations          │
+│   GET  /api/orchestrations/{id}     │
+│   GET  /api/orchestrations/{id}/    │
+│         result                      │
+│   POST /api/orchestrations/{id}/    │
+│         cancel                      │
+│   /api/knowledge/*, /api/risks/*    │
+│   /api/audit/*, /api/covenants/*    │
+│   /api/metrics/*, /api/kpis/*       │
+│   /api/apps/*, /api/health          │
+│   /api/mcp/* → proxied ─────────────┼──→ aos-mcp-servers (Function App 2)
+│   /api/agents (GET) → proxied ──────┼──→ aos-realm-of-agents (Function App 3)
+└─────────────────────────────────────┘
               │
               ▼
 ┌─────────────────────────────────────┐
@@ -36,12 +48,33 @@ this function app.
 │   Orchestration engine, Messaging,  │
 │   Storage, Auth, MCP, Monitoring    │
 └─────────────────────────────────────┘
+
+┌──────────────────────────────────┐   ┌──────────────────────────────────┐
+│  aos-mcp-servers (Function App 2)│   │ aos-realm-of-agents (Function    │
+│  GET  /api/mcp/servers           │   │ App 3)                           │
+│  GET  /api/mcp/servers/{id}      │   │ GET /api/realm/agents            │
+│  POST /api/mcp/servers/{id}/     │   │ GET /api/realm/agents/{id}       │
+│        tools/{tool}              │   │ GET /api/realm/config            │
+│  GET  /api/health                │   │ GET /api/health                  │
+└──────────────────────────────────┘   └──────────────────────────────────┘
 ```
 
 ## Key Principle
 
 > AOS provides agent orchestrations as an infrastructure service.
 > Client apps contain only business logic — AOS handles the rest.
+
+## Proxy Configuration
+
+`aos-dispatcher` proxies MCP and agent-catalog requests to the other two function apps.
+Set the following App Settings in your Azure deployment:
+
+| Setting | Description |
+|---------|-------------|
+| `MCP_SERVERS_BASE_URL` | Base URL of the `aos-mcp-servers` function app (e.g. `https://aos-mcp-servers.azurewebsites.net`) |
+| `REALM_OF_AGENTS_BASE_URL` | Base URL of the `aos-realm-of-agents` function app (e.g. `https://aos-realm-of-agents.azurewebsites.net`) |
+
+When these variables are not set the dispatcher returns stub/in-memory responses (useful for local development).
 
 ## HTTP Endpoints
 
@@ -76,11 +109,15 @@ this function app.
 | `AZURE_SERVICEBUS_CONNECTION_STRING` | Service Bus connection |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | App Insights telemetry |
 | `APP_ENVIRONMENT` | Environment name (dev/staging/prod) |
+| `MCP_SERVERS_BASE_URL` | Base URL of the aos-mcp-servers function app |
+| `REALM_OF_AGENTS_BASE_URL` | Base URL of the aos-realm-of-agents function app |
 
 ## Related Repositories
 
 - [aos-client-sdk](https://github.com/ASISaga/aos-client-sdk) — Client SDK
-- [aos-realm-of-agents](https://github.com/ASISaga/aos-realm-of-agents) — Agent catalog
 - [aos-kernel](https://github.com/ASISaga/aos-kernel) — OS kernel
+- [mcp](https://github.com/ASISaga/mcp) — aos-mcp-servers function app
+- [realm-of-agents](https://github.com/ASISaga/realm-of-agents) — aos-realm-of-agents function app
+- [aos-intelligence](https://github.com/ASISaga/aos-intelligence) — ML / intelligence layer
 - [business-infinity](https://github.com/ASISaga/business-infinity) — Example client app
 - [aos-infrastructure](https://github.com/ASISaga/aos-infrastructure) — Deployment
