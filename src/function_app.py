@@ -11,6 +11,16 @@ Service**.  Agents inheriting from PurposeDrivenAgent continue to run as Azure
 Functions.  Foundry is an implementation detail — clients interact only with
 the standard orchestration endpoints.
 
+AOS Function Apps (3 total — each is a separate Azure Functions deployment):
+    aos-dispatcher       This function app — central HTTP/Service Bus dispatcher
+    aos-mcp-servers      MCP server deployment & management (ASISaga/mcp)
+    aos-realm-of-agents  Agent catalog & registry (ASISaga/realm-of-agents)
+
+    The dispatcher proxies MCP and agent-catalog requests to the dedicated
+    function apps via the environment variables MCP_SERVERS_BASE_URL and
+    REALM_OF_AGENTS_BASE_URL.  When those variables are not set (e.g. in
+    local development) the dispatcher falls back to in-memory stubs.
+
 Endpoints — Orchestrations (all managed by Foundry Agent Service):
     POST /api/orchestrations              Submit an orchestration request
     GET  /api/orchestrations/{id}         Poll orchestration status
@@ -48,12 +58,14 @@ Endpoints — Analytics:
     POST /api/kpis                        Create a KPI
     GET  /api/kpis/dashboard              Get KPI dashboard
 
-Endpoints — MCP:
+Endpoints — MCP (proxied to aos-mcp-servers via MCP_SERVERS_BASE_URL):
     GET  /api/mcp/servers                 List MCP servers
     POST /api/mcp/servers/{s}/tools/{t}   Call an MCP tool
     GET  /api/mcp/servers/{s}/status      Get MCP server status
 
 Endpoints — Agents:
+    GET  /api/agents                      List agents (proxied to aos-realm-of-agents)
+    GET  /api/agents/{id}                 Get agent descriptor (proxied to aos-realm-of-agents)
     POST /api/agents/register             Register a PurposeDrivenAgent with Foundry
     POST /api/agents/{id}/ask             Ask an agent
     POST /api/agents/{id}/send            Send to an agent
@@ -78,9 +90,12 @@ Service Bus Triggers:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import urllib.error
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict
@@ -89,6 +104,13 @@ import azure.functions as func
 
 logger = logging.getLogger(__name__)
 app = func.FunctionApp()
+
+# ── Downstream Function App Base URLs ─────────────────────────────────────────
+# Set these in Azure App Settings to enable proxying to the dedicated function
+# apps.  When unset, MCP and agent-catalog endpoints fall back to in-memory
+# stubs (useful for local development and unit tests).
+_MCP_SERVERS_BASE_URL: str = os.environ.get("MCP_SERVERS_BASE_URL", "")
+_REALM_OF_AGENTS_BASE_URL: str = os.environ.get("REALM_OF_AGENTS_BASE_URL", "")
 
 # ── In-Memory Stores ──────────────────────────────────────────────────────────
 # Development/prototype only.  In production, replace with Azure Table Storage
@@ -103,7 +125,6 @@ _audit_entries: list = []
 _covenants: Dict[str, Dict[str, Any]] = {}
 _metrics_store: list = []
 _kpis: Dict[str, Dict[str, Any]] = {}
-_mcp_servers: Dict[str, Dict[str, Any]] = {}
 _networks: Dict[str, Dict[str, Any]] = {}
 _network_memberships: Dict[str, Dict[str, Any]] = {}
 _foundry_agents: Dict[str, Dict[str, Any]] = {}
@@ -783,43 +804,96 @@ async def get_kpi_dashboard(req: func.HttpRequest) -> func.HttpResponse:
     }), mimetype="application/json")
 
 
-# ── MCP Server Integration Endpoints ────────────────────────────────────────
+# ── MCP Server Integration Endpoints ─────────────────────────────────────────
+# These endpoints proxy to the *aos-mcp-servers* function app
+# (ASISaga/mcp).  Configure MCP_SERVERS_BASE_URL in App Settings to point at
+# the deployed aos-mcp-servers instance.  When the variable is unset, a
+# minimal stub response is returned so local development stays functional.
 
 
 @app.function_name("list_mcp_servers")
 @app.route(route="mcp/servers", methods=["GET"])
 async def list_mcp_servers(req: func.HttpRequest) -> func.HttpResponse:
-    """List available MCP servers."""
-    return func.HttpResponse(
-        json.dumps({"servers": list(_mcp_servers.values())}),
-        mimetype="application/json",
-    )
+    """List available MCP servers (proxied to aos-mcp-servers)."""
+    if not _MCP_SERVERS_BASE_URL:
+        return func.HttpResponse(
+            json.dumps({"servers": []}),
+            mimetype="application/json",
+        )
+    url = f"{_MCP_SERVERS_BASE_URL}/api/mcp/servers"
+    server_type = req.params.get("server_type")
+    if server_type:
+        url += f"?server_type={server_type}"
+    return await _proxy_get(url)
 
 
 @app.function_name("call_mcp_tool")
 @app.route(route="mcp/servers/{server}/tools/{tool}", methods=["POST"])
 async def call_mcp_tool(req: func.HttpRequest) -> func.HttpResponse:
-    """Invoke a tool on an MCP server."""
+    """Invoke a tool on an MCP server (proxied to aos-mcp-servers)."""
     server = req.route_params.get("server", "")
     tool = req.route_params.get("tool", "")
-    try:
-        args = req.get_json()
-    except ValueError:
-        args = {}
-    return func.HttpResponse(json.dumps({
-        "server": server, "tool": tool, "args": args, "result": None,
-    }), mimetype="application/json")
+    if not _MCP_SERVERS_BASE_URL:
+        try:
+            args = req.get_json()
+        except ValueError:
+            args = {}
+        return func.HttpResponse(json.dumps({
+            "server": server, "tool": tool, "args": args, "result": None,
+        }), mimetype="application/json")
+    return await _proxy_post(
+        f"{_MCP_SERVERS_BASE_URL}/api/mcp/servers/{server}/tools/{tool}",
+        req.get_body(),
+    )
 
 
 @app.function_name("get_mcp_server_status")
 @app.route(route="mcp/servers/{server}/status", methods=["GET"])
 async def get_mcp_server_status(req: func.HttpRequest) -> func.HttpResponse:
-    """Get MCP server status."""
+    """Get MCP server status (proxied to aos-mcp-servers)."""
     server = req.route_params.get("server", "")
-    return func.HttpResponse(json.dumps({
-        "name": server, "status": "running", "healthy": True,
-        "last_checked": datetime.now(timezone.utc).isoformat(),
-    }), mimetype="application/json")
+    if not _MCP_SERVERS_BASE_URL:
+        return func.HttpResponse(json.dumps({
+            "name": server, "status": "running", "healthy": True,
+            "last_checked": datetime.now(timezone.utc).isoformat(),
+        }), mimetype="application/json")
+    return await _proxy_get(f"{_MCP_SERVERS_BASE_URL}/api/mcp/servers/{server}")
+
+
+# ── Agent Catalog Endpoints ───────────────────────────────────────────────────
+# These endpoints proxy to the *aos-realm-of-agents* function app
+# (ASISaga/realm-of-agents).  Configure REALM_OF_AGENTS_BASE_URL in App
+# Settings.  When the variable is unset, the local _foundry_agents store is
+# used as a fallback.
+
+
+@app.function_name("list_agents")
+@app.route(route="agents", methods=["GET"])
+async def list_agents(req: func.HttpRequest) -> func.HttpResponse:
+    """List agents from the realm-of-agents catalog (proxied to aos-realm-of-agents)."""
+    if not _REALM_OF_AGENTS_BASE_URL:
+        return func.HttpResponse(
+            json.dumps({"agents": list(_foundry_agents.values())}),
+            mimetype="application/json",
+        )
+    url = f"{_REALM_OF_AGENTS_BASE_URL}/api/realm/agents"
+    agent_type = req.params.get("agent_type")
+    if agent_type:
+        url += f"?agent_type={agent_type}"
+    return await _proxy_get(url)
+
+
+@app.function_name("get_agent_descriptor")
+@app.route(route="agents/{agent_id}", methods=["GET"])
+async def get_agent_descriptor(req: func.HttpRequest) -> func.HttpResponse:
+    """Get an agent descriptor from the realm-of-agents catalog."""
+    agent_id = req.route_params.get("agent_id", "")
+    if not _REALM_OF_AGENTS_BASE_URL:
+        agent = _foundry_agents.get(agent_id)
+        if not agent:
+            return _json_error(f"Agent '{agent_id}' not found", 404)
+        return func.HttpResponse(json.dumps(agent), mimetype="application/json")
+    return await _proxy_get(f"{_REALM_OF_AGENTS_BASE_URL}/api/realm/agents/{agent_id}")
 
 
 # ── Agent Interaction Endpoints ──────────────────────────────────────────────
@@ -971,6 +1045,70 @@ async def list_networks(req: func.HttpRequest) -> func.HttpResponse:
 
 
 # ── Internal Helpers ─────────────────────────────────────────────────────────
+
+
+async def _proxy_get(url: str) -> func.HttpResponse:
+    """Forward a GET request to a downstream function app.
+
+    Args:
+        url: Full URL of the downstream endpoint.
+
+    Returns:
+        An ``HttpResponse`` with the upstream status code and body.
+        Returns 503 when the upstream is unreachable.
+    """
+    loop = asyncio.get_running_loop()
+    try:
+        def _do_get() -> tuple[int, bytes]:
+            with urllib.request.urlopen(url, timeout=30) as resp:
+                return resp.status, resp.read()
+
+        status, body = await loop.run_in_executor(None, _do_get)
+        return func.HttpResponse(body, status_code=status, mimetype="application/json")
+    except urllib.error.HTTPError as exc:
+        body = exc.read()
+        return func.HttpResponse(body, status_code=exc.code, mimetype="application/json")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Proxy GET %s failed: %s", url, exc)
+        return func.HttpResponse(
+            json.dumps({"error": f"Upstream service unavailable: {exc}"}),
+            status_code=503,
+            mimetype="application/json",
+        )
+
+
+async def _proxy_post(url: str, body: bytes) -> func.HttpResponse:
+    """Forward a POST request to a downstream function app.
+
+    Args:
+        url:  Full URL of the downstream endpoint.
+        body: Raw request body bytes.
+
+    Returns:
+        An ``HttpResponse`` with the upstream status code and body.
+        Returns 503 when the upstream is unreachable.
+    """
+    loop = asyncio.get_running_loop()
+    req_obj = urllib.request.Request(url, data=body, method="POST")
+    req_obj.add_header("Content-Type", "application/json")
+    try:
+        def _do_post() -> tuple[int, bytes]:
+            with urllib.request.urlopen(req_obj, timeout=30) as resp:
+                return resp.status, resp.read()
+
+        status, resp_body = await loop.run_in_executor(None, _do_post)
+        return func.HttpResponse(resp_body, status_code=status, mimetype="application/json")
+    except urllib.error.HTTPError as exc:
+        body = exc.read()
+        return func.HttpResponse(body, status_code=exc.code, mimetype="application/json")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Proxy POST %s failed: %s", url, exc)
+        return func.HttpResponse(
+            json.dumps({"error": f"Upstream service unavailable: {exc}"}),
+            status_code=503,
+            mimetype="application/json",
+        )
+
 
 
 def _json_error(message: str, status_code: int) -> func.HttpResponse:
