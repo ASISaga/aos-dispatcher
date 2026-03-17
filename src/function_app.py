@@ -1050,12 +1050,16 @@ async def list_networks(req: func.HttpRequest) -> func.HttpResponse:
 async def _proxy_get(url: str) -> func.HttpResponse:
     """Forward a GET request to a downstream function app.
 
+    SSL certificate verification is enforced by the default ``ssl`` context
+    (Python standard library default).  The 30-second timeout covers both the
+    TCP connection phase and the read phase.
+
     Args:
         url: Full URL of the downstream endpoint.
 
     Returns:
         An ``HttpResponse`` with the upstream status code and body.
-        Returns 503 when the upstream is unreachable.
+        Returns 503 when the upstream is unreachable and 504 on timeout.
     """
     loop = asyncio.get_running_loop()
     try:
@@ -1068,8 +1072,22 @@ async def _proxy_get(url: str) -> func.HttpResponse:
     except urllib.error.HTTPError as exc:
         body = exc.read()
         return func.HttpResponse(body, status_code=exc.code, mimetype="application/json")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Proxy GET %s failed: %s", url, exc)
+    except TimeoutError as exc:
+        logger.warning("Proxy GET %s timed out: %s", url, exc)
+        return func.HttpResponse(
+            json.dumps({"error": "Upstream service timed out"}),
+            status_code=504,
+            mimetype="application/json",
+        )
+    except urllib.error.URLError as exc:
+        logger.warning("Proxy GET %s network error: %s", url, exc.reason)
+        return func.HttpResponse(
+            json.dumps({"error": f"Upstream network error: {exc.reason}"}),
+            status_code=503,
+            mimetype="application/json",
+        )
+    except OSError as exc:
+        logger.warning("Proxy GET %s OS error: %s", url, exc)
         return func.HttpResponse(
             json.dumps({"error": f"Upstream service unavailable: {exc}"}),
             status_code=503,
@@ -1080,13 +1098,17 @@ async def _proxy_get(url: str) -> func.HttpResponse:
 async def _proxy_post(url: str, body: bytes) -> func.HttpResponse:
     """Forward a POST request to a downstream function app.
 
+    SSL certificate verification is enforced by the default ``ssl`` context
+    (Python standard library default).  The 30-second timeout covers both the
+    TCP connection phase and the read phase.
+
     Args:
         url:  Full URL of the downstream endpoint.
         body: Raw request body bytes.
 
     Returns:
         An ``HttpResponse`` with the upstream status code and body.
-        Returns 503 when the upstream is unreachable.
+        Returns 503 when the upstream is unreachable and 504 on timeout.
     """
     loop = asyncio.get_running_loop()
     req_obj = urllib.request.Request(url, data=body, method="POST")
@@ -1101,8 +1123,22 @@ async def _proxy_post(url: str, body: bytes) -> func.HttpResponse:
     except urllib.error.HTTPError as exc:
         body = exc.read()
         return func.HttpResponse(body, status_code=exc.code, mimetype="application/json")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Proxy POST %s failed: %s", url, exc)
+    except TimeoutError as exc:
+        logger.warning("Proxy POST %s timed out: %s", url, exc)
+        return func.HttpResponse(
+            json.dumps({"error": "Upstream service timed out"}),
+            status_code=504,
+            mimetype="application/json",
+        )
+    except urllib.error.URLError as exc:
+        logger.warning("Proxy POST %s network error: %s", url, exc.reason)
+        return func.HttpResponse(
+            json.dumps({"error": f"Upstream network error: {exc.reason}"}),
+            status_code=503,
+            mimetype="application/json",
+        )
+    except OSError as exc:
+        logger.warning("Proxy POST %s OS error: %s", url, exc)
         return func.HttpResponse(
             json.dumps({"error": f"Upstream service unavailable: {exc}"}),
             status_code=503,
