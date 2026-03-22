@@ -1,27 +1,28 @@
-"""Tests for the AOS Dispatcher (legacy test file — kept for backward compatibility).
+"""Tests for the AOS Dispatcher library (aos_dispatcher).
 
-These tests have been superseded by ``tests/test_dispatcher.py`` which imports
-directly from the ``aos_dispatcher`` library package.  The Azure Functions
-wrapper (``azure_functions/function_app.py``) relies on ``azure.functions``
-which is not required in this library repository's test dependencies.
-
-Retained here only to preserve historical test coverage of module-level symbols.
+Tests the orchestration API, app registration, and proxy fallback behaviour
+directly against the pure Python dispatcher module — no azure.functions
+dependency required.
 """
+import json
 import pytest
 
 import aos_dispatcher.dispatcher as dispatcher
 
 
-class TestFunctionApp:
-    """AOS dispatcher module tests (legacy names, new import paths)."""
+class TestDispatcher:
+    """Core dispatcher tests."""
 
-    def test_health_endpoint(self):
-        """Test health check — stores are present and correctly typed."""
-        assert isinstance(dispatcher._orchestrations, dict)
-        assert isinstance(dispatcher._registered_apps, dict)
+    def test_health(self):
+        """Test health check returns expected structure."""
+        body, status = dispatcher.health()
+        assert status == 200
+        assert body["app"] == "aos-dispatcher"
+        assert body["status"] == "healthy"
+        assert isinstance(body["active_orchestrations"], int)
 
     def test_process_orchestration_request(self):
-        """Test orchestration request processing via dispatcher module."""
+        """Test orchestration request processing."""
         body = {
             "agent_ids": ["ceo", "cfo"],
             "workflow": "collaborative",
@@ -29,7 +30,6 @@ class TestFunctionApp:
         }
         result, status = dispatcher.process_orchestration_request(body)
         assert status == 202
-
         assert result["status"] == "pending"
         assert result["agent_ids"] == ["ceo", "cfo"]
 
@@ -41,6 +41,7 @@ class TestFunctionApp:
         body = {"agent_ids": [], "task": {"type": "test"}}
         result, status = dispatcher.process_orchestration_request(body)
         assert status == 400
+        assert "error" in result
 
     def test_process_orchestration_request_with_source_app(self):
         """Test orchestration request from Service Bus with source app."""
@@ -64,11 +65,16 @@ class TestFunctionApp:
         assert "test-app" in dispatcher._registered_apps
         del dispatcher._registered_apps["test-app"]
 
+    def test_stores_are_dicts(self):
+        """Test that in-memory stores are correctly typed."""
+        assert isinstance(dispatcher._orchestrations, dict)
+        assert isinstance(dispatcher._registered_apps, dict)
+
 
 class TestProxyFallbacks:
     """Tests for MCP and agent-catalog proxy endpoints in stub/fallback mode."""
 
-    def test_mcp_servers_base_url_not_set(self):
+    def test_base_urls_not_set_by_default(self):
         """MCP_SERVERS_BASE_URL and REALM_OF_AGENTS_BASE_URL are empty by default."""
         assert dispatcher._MCP_SERVERS_BASE_URL == ""
         assert dispatcher._REALM_OF_AGENTS_BASE_URL == ""

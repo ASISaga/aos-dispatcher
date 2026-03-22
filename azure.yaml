@@ -1,6 +1,6 @@
 name: aos-dispatcher
 services:
   aos-dispatcher:
-    project: src
+    project: azure_functions
     language: python
     host: function

@@ -8,7 +8,11 @@
 
 `aos-dispatcher` is the **central dispatcher** for the Agent Operating System (AOS) — the component that receives all inbound requests and dispatches them to the AOS kernel, analogous to the dispatcher in a traditional operating system.
 
-It exposes AOS as an infrastructure service via Azure Functions: client applications submit orchestration requests, monitor progress, and manage perpetual agent orchestrations through HTTP and Azure Service Bus endpoints.
+The repository is split into **two parts**:
+
+1. **`src/aos_dispatcher/`** — Pure Python dispatcher library. Framework-agnostic; no dependency on `azure.functions`. Contains all business logic: orchestration processing, in-memory stores, app registration, knowledge base, risk registry, audit trail, covenants, analytics, MCP proxy, agent management, and network discovery. This package is retained in this repository and published as the `aos-dispatcher` Python library.
+
+2. **`azure_functions/`** — Thin Azure Functions wrapper that imports `aos_dispatcher` and exposes all operations as Azure HTTP endpoints and Service Bus triggers. This directory is intended to be **manually moved to the main `agent-operating-system` repository** where it will be deployed as an Azure Function App.
 
 All multi-agent orchestration is managed internally by the **Foundry Agent Service**. Agents inheriting from `PurposeDrivenAgent` run as Azure Functions. Foundry is an implementation detail — clients interact only with the standard orchestration endpoints via the `aos-client-sdk`.
 
@@ -38,10 +42,11 @@ All multi-agent orchestration is managed internally by the **Foundry Agent Servi
 | Component | Technology |
 |-----------|-----------|
 | Runtime | Python 3.10+ |
-| Framework | `azure-functions >= 1.21.0` |
-| Messaging | `azure-servicebus >= 7.12.0` |
+| Dispatcher library | `src/aos_dispatcher/` — no Azure dependencies |
+| Azure Functions wrapper | `azure_functions/` — `azure-functions >= 1.21.0` |
+| Messaging (Azure Functions only) | `azure-servicebus >= 7.12.0` |
 | Kernel integration | `aos-kernel[azure] >= 3.0.0` |
-| Agent orchestration | `agent-framework >= 1.0.0rc1`, `agent-framework-orchestrations`, `agent-framework-azurefunctions` |
+| Agent orchestration | `agent-framework >= 1.0.0rc1`, `agent-framework-orchestrations`, `agent-framework-azurefunctions` (wrapper only) |
 | Intelligence (optional) | `aos-intelligence[foundry] >= 1.0.0` |
 | Tests | `pytest >= 8.0.0` + `pytest-asyncio >= 0.24.0` |
 | Linter | `pylint >= 3.0.0` |
@@ -52,11 +57,17 @@ All multi-agent orchestration is managed internally by the **Foundry Agent Servi
 ```
 aos-dispatcher/
 ├── src/
-│   ├── function_app.py         # Azure Functions entry point — all HTTP and Service Bus handlers
-│   └── host.json               # Azure Functions host configuration
+│   └── aos_dispatcher/         # Pure Python dispatcher library
+│       ├── __init__.py         # Public API exports
+│       └── dispatcher.py       # All business logic — no azure.functions dep
+├── azure_functions/             # Azure Functions wrapper (to be moved to agent-operating-system)
+│   ├── function_app.py         # Thin Azure Functions HTTP/Service Bus handlers
+│   ├── host.json               # Azure Functions host configuration
+│   └── pyproject.toml          # Azure Functions project config (depends on aos-dispatcher)
 ├── tests/
 │   ├── __init__.py
-│   └── test_function_app.py    # pytest unit tests
+│   ├── test_dispatcher.py      # pytest unit tests for the pure library
+│   └── test_function_app.py    # Legacy tests (kept for backward compat, same coverage)
 ├── docs/
 │   ├── architecture.md         # System architecture and component diagram
 │   ├── api-reference.md        # HTTP endpoint and configuration reference
@@ -69,8 +80,8 @@ aos-dispatcher/
 │   ├── skills/azure-functions/ # Azure Functions development skill
 │   ├── prompts/azure-expert.md # Azure & cloud expert agent prompt
 │   └── instructions/azure-functions.instructions.md
-├── pyproject.toml              # Build config, dependencies, pytest settings
-├── azure.yaml                  # Azure Developer CLI deployment config
+├── pyproject.toml              # Library build config and pytest settings (no azure-functions dep)
+├── azure.yaml                  # Azure Developer CLI — points to azure_functions/
 └── README.md
 ```
 
@@ -130,23 +141,47 @@ aos-dispatcher/
 
 ## Core Patterns
 
+### Two-Part Architecture
+
+The repository is split into a pure Python library and an Azure Functions wrapper:
+
+```
+                ┌─────────────────────────────────┐
+                │  azure_functions/function_app.py │  ← Azure Functions wrapper
+                │  (to be moved to agent-OS repo) │
+                │  @app.route(...) handlers        │
+                │  _make_response() / _require_json│
+                └──────────────┬──────────────────┘
+                               │ imports
+                               ▼
+                ┌─────────────────────────────────┐
+                │  src/aos_dispatcher/dispatcher.py│  ← Pure Python library
+                │  (stays in this repo)           │
+                │  Returns (body, status_code)     │
+                │  No azure.functions dependency  │
+                └─────────────────────────────────┘
+```
+
+### Library Response Convention
+
+All `dispatcher.py` functions return a `(body, status_code)` tuple:
+- `body` is a `dict` (JSON-serialisable), `bytes` (proxy pass-through), or `None` (204 No Content)
+- The Azure Functions wrapper converts this to `func.HttpResponse` via `_make_response()`
+
 ### Orchestration Request Processing
 
-The shared `_process_orchestration_request` helper is called by both the HTTP endpoint and the Service Bus trigger. It registers agents with the Foundry Agent Service and stores orchestration records in memory.
+The shared `process_orchestration_request` function is called by both the HTTP endpoint and the Service Bus trigger. It registers agents with the Foundry Agent Service and stores orchestration records in memory.
 
 ```python
-def _process_orchestration_request(
+def process_orchestration_request(
     body: Dict[str, Any],
     source_app: str | None = None,
-) -> func.HttpResponse:
+) -> tuple[Dict[str, Any], int]:
     agent_ids = body.get("agent_ids", [])
     if not agent_ids:
-        return func.HttpResponse(
-            json.dumps({"error": "agent_ids must be a non-empty list"}),
-            status_code=400, mimetype="application/json",
-        )
+        return {"error": "agent_ids must be a non-empty list"}, 400
     orch_id = body.get("orchestration_id") or str(uuid.uuid4())
-    # ... register with Foundry, store record, return 202
+    # ... register with Foundry, store record, return ({...}, 202)
 ```
 
 ### App Registration
@@ -155,7 +190,7 @@ Client apps register via `POST /api/apps/register` to receive Service Bus connec
 
 ### Error Response Convention
 
-All error responses use a shared `_json_error` helper returning `{"error": "<message>"}` with an appropriate HTTP status code.
+All error responses return `({"error": "<message>"}, status_code)`. The Azure Functions wrapper serialises these to `application/json` with the appropriate HTTP status code.
 
 ## Testing Workflow
 
