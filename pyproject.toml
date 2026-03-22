@@ -5,18 +5,15 @@ build-backend = "setuptools.backends._legacy:_Backend"
 [project]
 name = "aos-dispatcher"
 version = "4.0.0"
-description = "AOS Dispatcher — the central HTTP/Service Bus dispatcher for the Agent Operating System. Routes requests to the kernel, exposes orchestration and enterprise service APIs as Azure Functions. (Renamed from aos-function-app v3.1.0; backward compatibility not required.)"
+description = "AOS Dispatcher — pure Python dispatcher library for the Agent Operating System. Framework-agnostic core that routes orchestration requests and exposes enterprise service APIs. Import this library from any hosting environment (Azure Functions, FastAPI, etc.)."
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 
 dependencies = [
     "aos-kernel[azure]>=3.0.0",
-    "azure-functions>=1.21.0",
-    "azure-servicebus>=7.12.0",
     "agent-framework>=1.0.0rc1",
     "agent-framework-orchestrations>=1.0.0b260219",
-    "agent-framework-azurefunctions>=1.0.0b260219",
 ]
 
 [project.optional-dependencies]
@@ -29,9 +26,14 @@ dev = [
     "pylint>=3.0.0",
 ]
 
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "--ignore=tests/test_azure_functions_infrastructure.py"
 
 [project.urls]
 Homepage = "https://github.com/ASISaga/aos-dispatcher"

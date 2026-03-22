@@ -66,7 +66,7 @@ jobs:
 
       - name: Run Pylint
         run: |
-          pylint src/ \
+          pylint src/aos_dispatcher/ \
             --output-format=text \
             --fail-under=5.0
 

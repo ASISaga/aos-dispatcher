@@ -4,7 +4,14 @@
 
 The AOS Dispatcher is the **central HTTP/Service Bus dispatcher** for the Agent Operating System.
 Client applications submit orchestration requests and retrieve results through the HTTP endpoints
-exposed by this function app.
+exposed by this dispatcher.
+
+The `aos-dispatcher` repository is structured in **two parts**:
+
+| Part | Location | Purpose |
+|------|----------|---------|
+| **Python library** | `src/aos_dispatcher/` | Pure Python dispatcher logic — no `azure.functions` dependency. Import from any hosting framework. |
+| **Azure Functions wrapper** | `azure_functions/` | Thin bindings that expose the library as Azure HTTP endpoints and Service Bus triggers. Intended to be deployed as part of the `agent-operating-system` repository. |
 
 The AOS platform is deployed as **3 separate Azure Functions apps**:
 

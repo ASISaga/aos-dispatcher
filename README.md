@@ -2,19 +2,29 @@
 
 **Central Dispatcher** for the Agent Operating System — the component that receives all inbound requests and dispatches them to the AOS kernel, analogous to the dispatcher in a traditional operating system.
 
-Exposes AOS as an infrastructure service via Azure Functions: client applications submit orchestration requests, monitor progress, and stop perpetual orchestrations through HTTP and Service Bus endpoints.
+## Repository Structure
 
-## Overview
+This repository is split into **two parts**:
 
-The dispatcher is the AOS entry point for all external requests, providing:
+| Part | Location | Purpose |
+|------|----------|---------|
+| **Python library** | `src/aos_dispatcher/` | Pure Python dispatcher core — no `azure.functions` dependency. Import from any hosting framework. |
+| **Azure Functions wrapper** | `azure_functions/` | Thin bindings that expose the library as Azure HTTP/Service Bus endpoints. Intended to be moved to the `agent-operating-system` repository for deployment. |
 
-- **Orchestration Submission** — `POST /api/orchestrations` to start perpetual agent orchestrations
-- **Status Monitoring** — `GET /api/orchestrations/{id}` to poll progress
-- **Stop Orchestration** — `POST /api/orchestrations/{id}/stop` to stop perpetual orchestrations
-- **Cancellation** — `POST /api/orchestrations/{id}/cancel` to cancel an orchestration
-- **Health Check** — `GET /api/health`
+## Library Usage
 
-## How Client Apps Use It
+```python
+from aos_dispatcher import dispatcher
+
+# Process an orchestration request (returns a (body_dict, status_code) tuple)
+body, status = dispatcher.process_orchestration_request({
+    "agent_ids": ["ceo", "cfo", "cmo"],
+    "workflow": "collaborative",
+    "task": {"type": "strategic_review"},
+})
+```
+
+## Client App Usage (via aos-client-sdk)
 
 ```python
 from aos_client import AOSClient
@@ -25,34 +35,57 @@ async with AOSClient(endpoint="https://my-aos.azurewebsites.net") as client:
         purpose="strategic_review",
         context={"quarter": "Q1-2026"},
     )
-    print(status.orchestration_id)  # perpetual — no final result
+    print(status.orchestration_id)
 ```
+
+## Overview
+
+The dispatcher provides:
+
+- **Orchestration Submission** — `POST /api/orchestrations` to start agent orchestrations
+- **Status Monitoring** — `GET /api/orchestrations/{id}` to poll progress
+- **Result Retrieval** — `GET /api/orchestrations/{id}/result`
+- **Cancellation** — `POST /api/orchestrations/{id}/cancel`
+- **Health Check** — `GET /api/health`
+- **Knowledge Base, Risk Registry, Audit, Covenants, Analytics** — enterprise service APIs
+- **MCP & Agent Catalog** — proxied to `aos-mcp-servers` and `aos-realm-of-agents`
 
 ## Prerequisites
 
-- Azure Functions Core Tools v4
 - Python 3.10+
-- Azure subscription with Service Bus namespace
+- Azure Functions Core Tools v4 (only for the `azure_functions/` wrapper)
+- Azure subscription with Service Bus namespace (only for deployment)
 
-## Local Development
+## Development
 
 ```bash
+# Install library dev dependencies
 pip install -e ".[dev]"
-func start
+
+# Run tests (pure library — no azure.functions required)
+pytest tests/ -v
+
+# Lint
+pylint src/
 ```
 
 ## Deployment
 
-Deploy via the [aos-infrastructure](https://github.com/ASISaga/aos-infrastructure) repository's orchestrator, or directly:
+The `azure_functions/` directory is deployed as part of the `agent-operating-system` Azure Functions app.  For standalone deployment:
 
 ```bash
-func azure functionapp publish <app-name>
+azd deploy aos-dispatcher
 ```
 
 ## Dependencies
 
-- `aos-kernel[azure]>=4.0.0` — AOS kernel with Azure backends (includes `aos-intelligence`)
-- `azure-functions>=1.21.0`
+**Library (`src/aos_dispatcher/`):**
+- `aos-kernel[azure]>=3.0.0`
+- `agent-framework>=1.0.0rc1`
+- `agent-framework-orchestrations>=1.0.0b260219`
+
+**Azure Functions wrapper (`azure_functions/`):**
+- All of the above, plus `azure-functions>=1.21.0`, `azure-servicebus>=7.12.0`, `agent-framework-azurefunctions>=1.0.0b260219`
 
 ## Related Repositories
 
@@ -66,3 +99,4 @@ func azure functionapp publish <app-name>
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE)
+
